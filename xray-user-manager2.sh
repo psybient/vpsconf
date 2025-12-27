@@ -22,7 +22,9 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Create users.json if it doesn't exist
-[ ! -f "$USERS_FILE" ] && echo "[]" > "$USERS_FILE"
+if [ ! -f "$USERS_FILE" ]; then
+    echo "[]" > "$USERS_FILE"
+fi
 
 backup_config() {
     cp "$CONFIG" "$CONFIG.bak"
@@ -39,14 +41,16 @@ save_users() {
 add_user() {
     read -p "User remark (e.g., john): " remark
     read -p "Custom UUID (leave blank for auto-generation): " custom_uuid
-    [ -z "\( custom_uuid" ] && custom_uuid= \)(uuidgen)
+    if [ -z "$custom_uuid" ]; then
+        custom_uuid=$(uuidgen)
+    fi
     read -p "Validity in days (e.g., 30): " days
     read -p "Traffic limit in GB (0 = unlimited): " total_gb
 
     expiry_ms=$(date -d "+$days days" +%s%3N)
     total_bytes=$((total_gb * 1024 * 1024 * 1024))
 
-    # Fixed: Single-line JSON construction (no multi-line issues)
+    # Safe single-line JSON (no multi-line issues)
     user_json=$(printf '{"remark":"%s","uuid":"%s","expiry_ms":%s,"total_bytes":%s}' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
 
     # Add to users.json
@@ -93,7 +97,6 @@ list_users() {
         expiry_date=\( (date -d @ \)(($(_jq '.expiry_ms') / 1000)) 2>/dev/null || echo "Unlimited")
         total_gb=\( (( \)(_jq '.total_bytes') / 1024 / 1024 / 1024))
 
-        # Traffic from Xray API
         uplink=$(curl -s "http://$API_ADDR/stat/user/$remark/uplink" | jq -r '.value // 0')
         downlink=$(curl -s "http://$API_ADDR/stat/user/$remark/downlink" | jq -r '.value // 0')
         used_gb=$(((uplink + downlink) / 1024 / 1024 / 1024))
