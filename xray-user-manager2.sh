@@ -6,7 +6,7 @@
 
 set -e
 
-XRAY_PATH="/home/ubuntu/xray"  # Adjust if your path is different
+XRAY_PATH="/home/ubuntu/xray"  # Change if your path is different
 CONFIG="$XRAY_PATH/config.json"
 USERS_FILE="$XRAY_PATH/users.json"
 API_ADDR="127.0.0.1:10000"     # Xray API port
@@ -17,8 +17,8 @@ SERVER_IP="YOUR_SERVER_IP_HERE"
 
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run with sudo"
-   exit 1
+    echo "This script must be run with sudo"
+    exit 1
 fi
 
 # Create users.json if it doesn't exist
@@ -46,15 +46,16 @@ add_user() {
     expiry_ms=$(date -d "+$days days" +%s%3N)
     total_bytes=$((total_gb * 1024 * 1024 * 1024))
 
-    user_json=$(jq -n \
-      --arg r "$remark" \
-      --arg u "$custom_uuid" \
-      --argjson e "$expiry_ms" \
-      --argjson t "$total_bytes" \
-      '{remark: $r, uuid: $u, expiry_ms: $e, total_bytes: $t}')
+    # Safer way to build JSON (compatible with older jq)
+    user_json=$(printf '{
+      "remark": "%s",
+      "uuid": "%s",
+      "expiry_ms": %s,
+      "total_bytes": %s
+    }' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
 
     # Add to users.json
-    users=$(load_users | jq '. += ['"$user_json"']')
+    users=$(load_users | jq ". += [$user_json]")
     save_users "$users"
 
     # Add to config.json
@@ -97,9 +98,9 @@ list_users() {
         expiry_date=\( (date -d @ \)(($(_jq '.expiry_ms') / 1000)) 2>/dev/null || echo "Unlimited")
         total_gb=\( (( \)(_jq '.total_bytes') / 1024 / 1024 / 1024))
 
-        # Traffic usage from Xray API
-        uplink=$(curl -s http://$API_ADDR/stat/user/$remark/uplink | jq -r '.value // 0')
-        downlink=$(curl -s http://$API_ADDR/stat/user/$remark/downlink | jq -r '.value // 0')
+        # Traffic from Xray API
+        uplink=$(curl -s "http://$API_ADDR/stat/user/$remark/uplink" | jq -r '.value // 0')
+        downlink=$(curl -s "http://$API_ADDR/stat/user/$remark/downlink" | jq -r '.value // 0')
         used_gb=$(((uplink + downlink) / 1024 / 1024 / 1024))
 
         echo "Remark: $remark | UUID: $uuid | Expiry: $expiry_date | Used: $used_gb / $total_gb GB"
@@ -125,11 +126,11 @@ echo "4) Check & Remove Expired Users"
 read -p "Choice: " choice
 
 case $choice in
-  1) add_user ;;
-  2) delete_user ;;
-  3) list_users ;;
-  4) check_expiry ;;
-  *) echo "Invalid choice" ;;
+    1) add_user ;;
+    2) delete_user ;;
+    3) list_users ;;
+    4) check_expiry ;;
+    *) echo "Invalid choice" ;;
 esac
 
 echo "Done!"
