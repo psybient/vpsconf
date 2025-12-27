@@ -46,13 +46,8 @@ add_user() {
     expiry_ms=$(date -d "+$days days" +%s%3N)
     total_bytes=$((total_gb * 1024 * 1024 * 1024))
 
-    # Safer way to build JSON (compatible with older jq)
-    user_json=$(printf '{
-      "remark": "%s",
-      "uuid": "%s",
-      "expiry_ms": %s,
-      "total_bytes": %s
-    }' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
+    # Fixed: Single-line JSON construction (no multi-line issues)
+    user_json=$(printf '{"remark":"%s","uuid":"%s","expiry_ms":%s,"total_bytes":%s}' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
 
     # Add to users.json
     users=$(load_users | jq ". += [$user_json]")
