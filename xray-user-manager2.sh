@@ -1,33 +1,29 @@
 #!/bin/bash
 
-# Enhanced Xray User Manager - Clean Setup with Traffic Monitoring
-# Saves users in JSON, auto UUID generation, expiry check, traffic query via Xray API
+# Enhanced Xray User Manager - Fixed Version (No Empty Config!)
 # Usage: sudo ./xray-user-manager.sh
 
 set -e
 
-XRAY_PATH="/home/ubuntu/xray"  # Change if your path is different
+XRAY_PATH="/home/ubuntu/xray"
 CONFIG="$XRAY_PATH/config.json"
 USERS_FILE="$XRAY_PATH/users.json"
-API_ADDR="127.0.0.1:10000"     # Xray API port
-INBOUND_TAG="inbound-443"      # Must match "tag" in your config.json inbounds
-PUBLIC_KEY="YOUR_PUBLIC_KEY_HERE"   # From xray x25519 → Password line
+API_ADDR="127.0.0.1:10000"
+INBOUND_TAG="inbound-443"
+PUBLIC_KEY="YOUR_PUBLIC_KEY_HERE"
 SHORT_ID="YOUR_SHORT_ID_HERE"
 SERVER_IP="YOUR_SERVER_IP_HERE"
 
-# Check if running as root
 if [[ $EUID -ne 0 ]]; then
-    echo "This script must be run with sudo"
+    echo "Run with sudo"
     exit 1
 fi
 
-# Create users.json if it doesn't exist
-if [ ! -f "$USERS_FILE" ]; then
-    echo "[]" > "$USERS_FILE"
-fi
+[ ! -f "$USERS_FILE" ] && echo "[]" > "$USERS_FILE"
 
 backup_config() {
     cp "$CONFIG" "$CONFIG.bak"
+    echo "Backup created: $CONFIG.bak"
 }
 
 load_users() {
@@ -40,26 +36,22 @@ save_users() {
 
 add_user() {
     read -p "User remark (e.g., john): " remark
-    read -p "Custom UUID (leave blank for auto-generation): " custom_uuid
-    if [ -z "$custom_uuid" ]; then
-        custom_uuid=$(uuidgen)
-    fi
-    read -p "Validity in days (e.g., 30): " days
-    read -p "Traffic limit in GB (0 = unlimited): " total_gb
+    read -p "Custom UUID (blank for auto): " custom_uuid
+    [ -z "\( custom_uuid" ] && custom_uuid= \)(uuidgen)
+    read -p "Validity days: " days
+    read -p "Traffic limit GB (0=unlimited): " total_gb
 
     expiry_ms=$(date -d "+$days days" +%s%3N)
     total_bytes=$((total_gb * 1024 * 1024 * 1024))
 
-    # Safe single-line JSON construction
     user_json=$(printf '{"remark":"%s","uuid":"%s","expiry_ms":%s,"total_bytes":%s}' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
 
-    # Add to users.json
     users=$(load_users | jq ". += [$user_json]")
     save_users "$users"
 
-    # Add to config.json
+    # FIXED: Proper full config update
     backup_config
-    jq '.inbounds[] | select(.tag == "'"$INBOUND_TAG"'") .settings.clients += [{
+    jq '(.inbounds[] | select(.tag == "'"$INBOUND_TAG"'") | .settings.clients) += [{
       "id": "'"$custom_uuid"'",
       "flow": "xtls-rprx-vision",
       "email": "'"$remark"'",
@@ -69,52 +61,45 @@ add_user() {
     }]' "$CONFIG.bak" > "$CONFIG"
 
     systemctl restart xray
-
-    echo "User $remark added (UUID: $custom_uuid)"
-    echo "VLESS Connection Link:"
-    echo "vless://$custom_uuid@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.google-analytics.com&fp=chrome&pbk=$PUBLIC_KEY&sid=$SHORT_ID&type=tcp&headerType=none#$remark"
+    echo "User $remark added"
+    echo "Link: vless://$custom_uuid@$SERVER_IP:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.google-analytics.com&fp=chrome&pbk=$PUBLIC_KEY&sid=$SHORT_ID&type=tcp&headerType=none#$remark"
 }
 
 delete_user() {
     read -p "UUID to delete: " del_uuid
+
     users=$(load_users | jq 'map(select(.uuid != "'"$del_uuid"'"))')
     save_users "$users"
 
+    # FIXED: Proper full config update
     backup_config
-    jq '.inbounds[] | select(.tag == "'"$INBOUND_TAG"'") .settings.clients |= map(select(.id != "'"$del_uuid"'"))' "$CONFIG.bak" > "$CONFIG"
+    jq '(.inbounds[] | select(.tag == "'"$INBOUND_TAG"'") | .settings.clients) |= map(select(.id != "'"$del_uuid"'"))' "$CONFIG.bak" > "$CONFIG"
 
     systemctl restart xray
-    echo "User with UUID $del_uuid deleted"
+    echo "User $del_uuid deleted"
 }
 
 list_users() {
-    echo "=== User List ==="
+    echo "=== Users ==="
     users=$(load_users)
     for row in $(echo "$users" | jq -r '.[] | @base64'); do
-        # Decode base64 row
         decoded=$(echo "$row" | base64 -d)
-
         remark=$(echo "$decoded" | jq -r '.remark')
         uuid=$(echo "$decoded" | jq -r '.uuid')
         expiry_ms_raw=$(echo "$decoded" | jq -r '.expiry_ms')
-        total_bytes=$(echo "$decoded" | jq -r '.total_bytes')
-        total_gb=$((total_bytes / 1024 / 1024 / 1024))
+        total_gb=$(echo "$decoded" | jq -r '.total_bytes' | awk '{print int($1 / 1024 / 1024 / 1024)}')
 
-        # Calculate expiry date
-        if [ "$expiry_ms_raw" = "null" ] || [ -z "$expiry_ms_raw" ]; then
-            expiry_date="Unlimited"
+        if [ "$expiry_ms_raw" = "null" ]; then
+            expiry="Unlimited"
         else
-            expiry_seconds=$((expiry_ms_raw / 1000))
-            expiry_date=$(date -d "@$expiry_seconds" +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Invalid")
+            expiry=\( (date -d "@ \)((expiry_ms_raw / 1000))" +"%Y-%m-%d" 2>/dev/null || echo "Invalid")
         fi
 
-        # Traffic usage from Xray API
         uplink=$(curl -s "http://$API_ADDR/stat/user/$remark/uplink" | jq -r '.value // 0')
         downlink=$(curl -s "http://$API_ADDR/stat/user/$remark/downlink" | jq -r '.value // 0')
-        used_bytes=$((uplink + downlink))
-        used_gb=$((used_bytes / 1024 / 1024 / 1024))
+        used_gb=$(((uplink + downlink) / 1024 / 1024 / 1024))
 
-        echo "Remark: $remark | UUID: $uuid | Expiry: $expiry_date | Used: $used_gb / $total_gb GB"
+        echo "Remark: $remark | UUID: $uuid | Expiry: $expiry | Used: $used_gb / $total_gb GB"
     done
 }
 
@@ -124,16 +109,12 @@ check_expiry() {
     save_users "$users"
 
     backup_config
-    jq '.inbounds[] | select(.tag == "'"$INBOUND_TAG"'") .settings.clients |= map(select(.expiryTime > '"$now_ms"'))' "$CONFIG.bak" > "$CONFIG"
+    jq '(.inbounds[] | select(.tag == "'"$INBOUND_TAG"'") | .settings.clients) |= map(select(.expiryTime > '"$now_ms"'))' "$CONFIG.bak" > "$CONFIG"
     systemctl restart xray
-    echo "Expired users removed"
+    echo "Expired users cleaned"
 }
 
-# Menu
-echo "1) Add User"
-echo "2) Delete User"
-echo "3) List Users + Traffic"
-echo "4) Check & Remove Expired Users"
+echo "1) Add User  2) Delete User  3) List  4) Clean Expired"
 read -p "Choice: " choice
 
 case $choice in
@@ -141,7 +122,7 @@ case $choice in
     2) delete_user ;;
     3) list_users ;;
     4) check_expiry ;;
-    *) echo "Invalid choice" ;;
+    *) echo "Invalid" ;;
 esac
 
 echo "Done!"
