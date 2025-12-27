@@ -50,7 +50,7 @@ add_user() {
     expiry_ms=$(date -d "+$days days" +%s%3N)
     total_bytes=$((total_gb * 1024 * 1024 * 1024))
 
-    # Safe single-line JSON (no multi-line issues)
+    # Safe single-line JSON
     user_json=$(printf '{"remark":"%s","uuid":"%s","expiry_ms":%s,"total_bytes":%s}' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
 
     # Add to users.json
@@ -91,12 +91,20 @@ list_users() {
     echo "=== User List ==="
     users=$(load_users)
     for row in $(echo "$users" | jq -r '.[] | @base64'); do
-        _jq() { echo \( {row} | base64 -d | jq -r \){1}; }
+        _jq() {
+            echo "$row" | base64 -d | jq -r "$1"
+        }
         remark=$(_jq '.remark')
         uuid=$(_jq '.uuid')
-        expiry_date=\( (date -d @ \)(($(_jq '.expiry_ms') / 1000)) 2>/dev/null || echo "Unlimited")
-        total_gb=\( (( \)(_jq '.total_bytes') / 1024 / 1024 / 1024))
+        expiry_ms_raw=$(_jq '.expiry_ms')
+        if [ "$expiry_ms_raw" = "null" ] || [ -z "$expiry_ms_raw" ]; then
+            expiry_date="Unlimited"
+        else
+            expiry_date=\( (date -d @" \)((expiry_ms_raw / 1000))" 2>/dev/null || echo "Invalid")
+        fi
+        total_gb=$((_jq '.total_bytes' / 1024 / 1024 / 1024))
 
+        # Traffic from Xray API
         uplink=$(curl -s "http://$API_ADDR/stat/user/$remark/uplink" | jq -r '.value // 0')
         downlink=$(curl -s "http://$API_ADDR/stat/user/$remark/downlink" | jq -r '.value // 0')
         used_gb=$(((uplink + downlink) / 1024 / 1024 / 1024))
