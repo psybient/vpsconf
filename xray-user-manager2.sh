@@ -50,7 +50,7 @@ add_user() {
     expiry_ms=$(date -d "+$days days" +%s%3N)
     total_bytes=$((total_gb * 1024 * 1024 * 1024))
 
-    # Safe single-line JSON
+    # Safe single-line JSON construction
     user_json=$(printf '{"remark":"%s","uuid":"%s","expiry_ms":%s,"total_bytes":%s}' "$remark" "$custom_uuid" "$expiry_ms" "$total_bytes")
 
     # Add to users.json
@@ -91,23 +91,28 @@ list_users() {
     echo "=== User List ==="
     users=$(load_users)
     for row in $(echo "$users" | jq -r '.[] | @base64'); do
-        _jq() {
-            echo "$row" | base64 -d | jq -r "$1"
-        }
-        remark=$(_jq '.remark')
-        uuid=$(_jq '.uuid')
-        expiry_ms_raw=$(_jq '.expiry_ms')
+        # Decode base64 row
+        decoded=$(echo "$row" | base64 -d)
+
+        remark=$(echo "$decoded" | jq -r '.remark')
+        uuid=$(echo "$decoded" | jq -r '.uuid')
+        expiry_ms_raw=$(echo "$decoded" | jq -r '.expiry_ms')
+        total_bytes=$(echo "$decoded" | jq -r '.total_bytes')
+        total_gb=$((total_bytes / 1024 / 1024 / 1024))
+
+        # Calculate expiry date
         if [ "$expiry_ms_raw" = "null" ] || [ -z "$expiry_ms_raw" ]; then
             expiry_date="Unlimited"
         else
-            expiry_date=\( (date -d @" \)((expiry_ms_raw / 1000))" 2>/dev/null || echo "Invalid")
+            expiry_seconds=$((expiry_ms_raw / 1000))
+            expiry_date=$(date -d "@$expiry_seconds" +"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Invalid")
         fi
-        total_gb=$((_jq '.total_bytes' / 1024 / 1024 / 1024))
 
-        # Traffic from Xray API
+        # Traffic usage from Xray API
         uplink=$(curl -s "http://$API_ADDR/stat/user/$remark/uplink" | jq -r '.value // 0')
         downlink=$(curl -s "http://$API_ADDR/stat/user/$remark/downlink" | jq -r '.value // 0')
-        used_gb=$(((uplink + downlink) / 1024 / 1024 / 1024))
+        used_bytes=$((uplink + downlink))
+        used_gb=$((used_bytes / 1024 / 1024 / 1024))
 
         echo "Remark: $remark | UUID: $uuid | Expiry: $expiry_date | Used: $used_gb / $total_gb GB"
     done
